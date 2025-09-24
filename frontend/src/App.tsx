@@ -266,8 +266,6 @@ function App() {
   };
 
   const opts: YouTubeProps['opts'] = {
-    height: '390',
-    width: '640',
     playerVars: {
       autoplay: 0,
     },
@@ -376,7 +374,7 @@ function App() {
         </div>
 
         {videoId && (
-          <div className="player-wrapper mb-4">
+          <div className="player-wrapper">
             <YouTube videoId={videoId} opts={opts} onReady={onPlayerReady} className="react-player" />
           </div>
         )}

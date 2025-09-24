@@ -1,18 +1,15 @@
 /* Player e Wrapper */
 .player-wrapper {
-  position: relative;
-  padding-top: 56.25%; /* Proporção 16:9 para vídeos */
   background-color: #000;
   border-radius: 0.5rem;
   overflow: hidden; /* Garante que o player não vaze do border-radius */
+  max-width: 720px; /* Limita a largura máxima do player */
+  margin: 0 auto; /* Centraliza o player */
 }
 
 .react-player {
-  position: absolute;
-  top: 0;
-  left: 0;
   width: 100%;
-  height: 100%;
+  aspect-ratio: 16 / 9;
 }
 
 /* Área de Exibição da Legenda */
@@ -25,7 +22,7 @@
   display: flex;
   justify-content: center;
   align-items: center;
-  margin-top: 1.5rem;
+  margin-top: 1rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 

@@ -101,15 +101,22 @@ class CardProcessingRequest(BaseModel):
 
 # --- Funções Helper ---
 def get_base_term(term: str) -> str:
-    """Lematiza o termo, a menos que seja um verbo irregular conhecido."""
-    lower_term = term.lower()
+    """Lematiza o termo. Se for uma expressão, lematiza cada palavra."""
+    lower_term = term.lower().strip()
+    
+    # Se a expressão inteira for uma exceção (improvável, mas para segurança)
     if lower_term in IRREGULAR_VERBS:
         return lower_term
     
     doc = nlp(lower_term)
-    # Pega o lema do primeiro token (considerando que 'term' é uma palavra ou expressão curta)
-    base_form = doc[0].lemma_
-    return base_form
+    
+    # Lematiza cada token, mas mantém a palavra original se for um verbo irregular conhecido
+    lemmas = [
+        token.text if token.text in IRREGULAR_VERBS else token.lemma_
+        for token in doc
+    ]
+    
+    return " ".join(lemmas)
 
 # --- Endpoints ---
 @app.get("/")
