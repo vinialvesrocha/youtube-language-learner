@@ -1,0 +1,77 @@
+/* Player e Wrapper */
+.player-wrapper {
+  position: relative;
+  padding-top: 56.25%; /* Proporção 16:9 para vídeos */
+  background-color: #000;
+  border-radius: 0.5rem;
+  overflow: hidden; /* Garante que o player não vaze do border-radius */
+}
+
+.react-player {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Área de Exibição da Legenda */
+.subtitle-display-area {
+  background-color: #212529; /* Fundo escuro para combinar com a Navbar */
+  border: 1px solid #495057;
+  border-radius: 0.5rem;
+  padding: 1.5rem 2rem;
+  min-height: 120px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 1.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Texto da Legenda Ativa */
+.current-subtitle-text {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: #e9ecef; /* Cor de texto clara para bom contraste */
+  margin: 0;
+  text-align: center;
+  line-height: 1.4;
+  transition: color 0.2s ease-in-out, text-shadow 0.2s ease-in-out;
+}
+
+/* Placeholder para quando não há legenda */
+.current-subtitle-text:empty::before {
+  content: '...';
+  color: #6c757d;
+}
+
+/* Estilos para seleção de palavras */
+.clickable-word {
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
+}
+
+.selected-word {
+  background-color: #ffc107; /* Amarelo Bootstrap para destaque */
+  color: #212529; /* Texto escuro para contraste com o amarelo */
+  cursor: pointer;
+  border-radius: 0.25rem;
+}
+
+/* Container para o botão de criar flashcard */
+.flashcard-button-container {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1050; /* Z-index alto para ficar sobre outros elementos */
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+  border-radius: 0.5rem;
+}
+
+.flashcard-button-container .btn {
+  font-size: 1.1rem;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+}

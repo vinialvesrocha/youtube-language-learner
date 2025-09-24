@@ -1,0 +1,20 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+backend/venv/
+
+# Downloads
+backend/downloads/
+
+# Node.js
+frontend/node_modules/
+frontend/build/
+.npm
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
