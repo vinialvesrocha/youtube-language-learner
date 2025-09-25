@@ -53,6 +53,7 @@ function App() {
   const [currentSubtitle, setCurrentSubtitle] = useState('');
   const [player, setPlayer] = useState<any | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estado para seleção de palavras e flashcards
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
@@ -132,6 +133,52 @@ function App() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleVttFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsLoading(true);
+    setError('');
+    setSubtitles([]);
+    setCurrentSubtitle('');
+    setSelectedWords([]);
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const content = e.target?.result;
+        if (typeof content !== 'string') {
+            setError('Não foi possível ler o arquivo VTT.');
+            setIsLoading(false);
+            return;
+        }
+
+        try {
+            const response = await fetch('http://localhost:8000/api/process-vtt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ vtt_content: content }),
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.detail || 'Erro ao processar o arquivo VTT.');
+            }
+
+            const data = await response.json();
+            setSubtitles(data.subtitles);
+        } catch (err: any) {
+            setError(err.message || 'Erro desconhecido ao processar o arquivo.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    reader.onerror = () => {
+        setError('Erro ao ler o arquivo.');
+        setIsLoading(false);
+    };
+    reader.readAsText(file);
   };
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
@@ -369,7 +416,17 @@ function App() {
             <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
               {isLoading ? <Spinner size="sm" /> : 'Processar'}
             </Button>
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
+              Subir VTT
+            </Button>
           </InputGroup>
+          <Form.Control
+            type="file"
+            accept=".vtt"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            onChange={handleVttFileSelect}
+          />
           {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
         </div>
 

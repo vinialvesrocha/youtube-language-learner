@@ -11,6 +11,7 @@ import requests
 import json
 import re
 import spacy
+import io
 
 import os
 
@@ -98,6 +99,9 @@ class DuplicateCheckRequest(BaseModel):
 class CardProcessingRequest(BaseModel):
     words: List[str]
     flashcards: List[GeneratedFlashcard]
+
+class VttUploadRequest(BaseModel):
+    vtt_content: str
 
 # --- Funções Helper ---
 def get_base_term(term: str) -> str:
@@ -290,6 +294,27 @@ def send_to_anki(request: CardProcessingRequest):
         raise HTTPException(status_code=503, detail="Conexão com o Anki falhou. Verifique se o Anki está aberto e o add-on AnkiConnect está instalado.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ocorreu um erro inesperado: {str(e)}")
+
+@app.post("/api/process-vtt")
+def process_vtt(request: VttUploadRequest):
+    try:
+        captions = []
+        # Usa io.StringIO para tratar o conteúdo de string como um arquivo
+        vtt_file_like_object = io.StringIO(request.vtt_content)
+        for caption in webvtt.read_buffer(vtt_file_like_object):
+            captions.append({
+                'start': caption.start,
+                'end': caption.end,
+                'text': caption.text.strip()
+            })
+
+        return {
+            "message": "Legendas VTT processadas com sucesso!",
+            "subtitles": captions,
+        }
+    except Exception as e:
+        print(f"Erro ao processar arquivo VTT: {e}")
+        raise HTTPException(status_code=400, detail=f"Falha ao processar o arquivo VTT: {e}")
 
 @app.post("/api/process-video")
 def process_video(request: VideoRequest):
