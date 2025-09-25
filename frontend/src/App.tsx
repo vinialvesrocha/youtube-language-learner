@@ -139,11 +139,23 @@ function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Get video ID from URL input
+    const id = getYouTubeId(videoUrl);
+    if (!id) {
+      setError('Por favor, insira uma URL de vídeo válida antes de subir a legenda.');
+      // Clear the file input so the user can try again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      return;
+    }
+
     setIsLoading(true);
     setError('');
     setSubtitles([]);
     setCurrentSubtitle('');
     setSelectedWords([]);
+    setVideoId(id); // Set the video ID to load the player
 
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -335,7 +347,7 @@ function App() {
                   />
                   <div>
                     <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} />
-                    <Card.Text className="text-muted"><strong>Português:</strong> {card.portuguese_translation}</Card.Text>
+                    <Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${card.portuguese_translation}` }} />
                     <small className="text-info">Tradução do Termo: {card.term_translation}</small>
                   </div>
                 </Card.Body>
@@ -359,7 +371,7 @@ function App() {
                 <Card.Body>
                   {item.is_duplicate && <Badge bg="warning" className="mb-2">DUPLICATA</Badge>}
                   <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${item.flashcard.english_sentence}` }} />
-                  <Card.Text className="text-muted"><strong>Português:</strong> {item.flashcard.portuguese_translation}</Card.Text>
+                  <Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${item.flashcard.portuguese_translation}` }} />
                   <small className="text-info">Tradução do Termo: {item.flashcard.term_translation}</small>
                 </Card.Body>
               </Card>

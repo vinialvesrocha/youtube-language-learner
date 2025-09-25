@@ -170,11 +170,18 @@ def generate_flashcards(request: FlashcardRequest):
         
         processed_flashcards = []
         for card in raw_flashcards:
-            # Adiciona o negrito na palavra/termo selecionado
-            sentence = card.get("english_sentence", "")
-            # Usa regex para substituir a palavra/termo de forma case-insensitive
-            bolded_sentence = re.sub(f"(?i)({re.escape(term)})", r"<b>\1</b>", sentence, 1)
-            card["english_sentence"] = bolded_sentence
+            # Adiciona negrito à palavra/termo na frase em inglês
+            english_sentence = card.get("english_sentence", "")
+            bolded_english = re.sub(f"(?i)({re.escape(term)})", r"<b>\\1</b>", english_sentence, 1)
+            card["english_sentence"] = bolded_english
+
+            # Adiciona negrito à tradução do termo na frase em português
+            portuguese_sentence = card.get("portuguese_translation", "")
+            term_translation = card.get("term_translation", "")
+            if term_translation and term_translation in portuguese_sentence:
+                bolded_portuguese = re.sub(f"({re.escape(term_translation)})", r"<b>\\1</b>", portuguese_sentence, 1)
+                card["portuguese_translation"] = bolded_portuguese
+            
             processed_flashcards.append(card)
 
         return {"flashcards": processed_flashcards}
