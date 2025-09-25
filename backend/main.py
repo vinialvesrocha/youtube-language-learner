@@ -139,8 +139,8 @@ def generate_flashcards(request: FlashcardRequest):
     Crie 3 flashcards para o seguinte termo ou expressão em inglês: "{term}".
 
     Para cada flashcard, forneça:
-    1. Uma frase de exemplo em inglês, usando o termo. A frase deve ser simples e clara.
-    2. A tradução completa dessa frase para o português brasileiro.
+    1. Uma frase de exemplo em inglês, usando o termo. Na frase, coloque o termo "{term}" em negrito usando tags <b>.
+    2. A tradução completa dessa frase para o português brasileiro. Na tradução, coloque a tradução do termo também em negrito usando tags <b>.
     3. A tradução específica do termo "{term}" DENTRO do contexto da frase, em português.
 
     Formate a sua resposta EXATAMENTE como um JSON contendo uma lista de objetos.
@@ -150,13 +150,13 @@ def generate_flashcards(request: FlashcardRequest):
     Exemplo de formato de resposta para o termo "fast":
     [
         {{
-            "english_sentence": "He is running fast.",
-            "portuguese_translation": "Ele está correndo rápido.",
+            "english_sentence": "He is running <b>fast</b>.",
+            "portuguese_translation": "Ele está correndo <b>rápido</b>.",
             "term_translation": "rápido"
         }},
         {{
-            "english_sentence": "The monk will fast for a day.",
-            "portuguese_translation": "O monge vai jejuar por um dia.",
+            "english_sentence": "The monk will <b>fast</b> for a day.",
+            "portuguese_translation": "O monge vai <b>jejuar</b> por um dia.",
             "term_translation": "jejuar"
         }}
     ]
@@ -164,27 +164,13 @@ def generate_flashcards(request: FlashcardRequest):
 
     try:
         response = model.generate_content(prompt)
+        # Limpa a resposta para garantir que seja um JSON válido
         cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         
+        # A IA agora retorna o HTML diretamente, então não precisamos mais processar aqui
         raw_flashcards = json.loads(cleaned_response_text)
-        
-        processed_flashcards = []
-        for card in raw_flashcards:
-            # Adiciona negrito à palavra/termo na frase em inglês
-            english_sentence = card.get("english_sentence", "")
-            bolded_english = re.sub(f"(?i)({re.escape(term)})", r"<b>\\1</b>", english_sentence, 1)
-            card["english_sentence"] = bolded_english
 
-            # Adiciona negrito à tradução do termo na frase em português
-            portuguese_sentence = card.get("portuguese_translation", "")
-            term_translation = card.get("term_translation", "")
-            if term_translation and term_translation in portuguese_sentence:
-                bolded_portuguese = re.sub(f"({re.escape(term_translation)})", r"<b>\\1</b>", portuguese_sentence, 1)
-                card["portuguese_translation"] = bolded_portuguese
-            
-            processed_flashcards.append(card)
-
-        return {"flashcards": processed_flashcards}
+        return {"flashcards": raw_flashcards}
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Erro ao decodificar a resposta da IA. A resposta não foi um JSON válido.")
