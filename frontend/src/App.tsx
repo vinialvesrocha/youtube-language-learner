@@ -11,6 +11,7 @@ interface Subtitle {
 }
 
 interface Flashcard {
+  id: string;
   english_sentence: string;
   portuguese_translation: string;
   term_translation: string;
@@ -69,6 +70,8 @@ function App() {
   const [isProcessingAnki, setIsProcessingAnki] = useState(false);
   const [ankiStatusMessage, setAnkiStatusMessage] = useState('');
   const [cardsForConfirmation, setCardsForConfirmation] = useState<ConfirmationCard[]>([]);
+  const [editingCardIndex, setEditingCardIndex] = useState<number | null>(null);
+  const [editingCardContent, setEditingCardContent] = useState<Flashcard | null>(null);
 
 
   // Efeito para buscar legenda atual
@@ -227,18 +230,31 @@ function App() {
     setModalStep('selection');
     setShowFlashcardModal(true);
 
+    const currentIndex = subtitles.findIndex(sub => sub.text === currentSubtitle);
+    const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
+    const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
+
     try {
       const response = await fetch('http://localhost:8000/api/generate-flashcards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words: selectedWords }),
+        body: JSON.stringify({
+          words: selectedWords,
+          previous_subtitle: previousSubtitle,
+          current_subtitle: currentSubtitle,
+          next_subtitle: nextSubtitle,
+        }),
       });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.detail || 'Erro ao gerar flashcards.');
       }
       const data = await response.json();
-      setGeneratedFlashcards(data.flashcards);
+      const flashcardsWithId = data.flashcards.map((card: Omit<Flashcard, 'id'>, index: number) => ({
+        ...card,
+        id: `temp-id-${index}-${Date.now()}`
+      }));
+      setGeneratedFlashcards(flashcardsWithId);
     } catch (err: any) {
       setFlashcardError(err.message || 'Não foi possível conectar ao servidor.');
     } finally {
@@ -248,13 +264,9 @@ function App() {
 
   const handleFlashcardSelection = (card: Flashcard) => {
     setSelectedFlashcards(prev => {
-      const isSelected = prev.some(
-        selectedCard => selectedCard.english_sentence === card.english_sentence
-      );
+      const isSelected = prev.some(selectedCard => selectedCard.id === card.id);
       if (isSelected) {
-        return prev.filter(
-          selectedCard => selectedCard.english_sentence !== card.english_sentence
-        );
+        return prev.filter(selectedCard => selectedCard.id !== card.id);
       } else {
         return [...prev, card];
       }
@@ -324,6 +336,41 @@ function App() {
     }
   };
 
+  const handleEditCard = (index: number) => {
+    setEditingCardIndex(index);
+    setEditingCardContent(generatedFlashcards[index]);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCardIndex(null);
+    setEditingCardContent(null);
+  };
+
+  const handleSaveCard = () => {
+    if (editingCardIndex === null || !editingCardContent) return;
+
+    const updatedFlashcards = [...generatedFlashcards];
+    updatedFlashcards[editingCardIndex] = editingCardContent;
+    setGeneratedFlashcards(updatedFlashcards);
+
+    // Atualiza também o card selecionado, se for o caso
+    const isSelected = selectedFlashcards.some(card => card.id === editingCardContent.id);
+    if (isSelected) {
+        const updatedSelected = selectedFlashcards.map(card => 
+            card.id === editingCardContent.id ? editingCardContent : card
+        );
+        setSelectedFlashcards(updatedSelected);
+    }
+
+    handleCancelEdit();
+  };
+
+  const handleEditingCardChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!editingCardContent) return;
+    const { name, value } = e.target;
+    setEditingCardContent({ ...editingCardContent, [name]: value });
+  };
+
   const opts: YouTubeProps['opts'] = {
     playerVars: {
       autoplay: 0,
@@ -335,21 +382,60 @@ function App() {
       case 'selection':
         return (
           <Form>
+            <Alert variant="light">
+              Os 4 primeiros cartões são baseados no contexto do vídeo. Os seguintes mostram outros usos da palavra.
+            </Alert>
             {generatedFlashcards.map((card, index) => (
-              <Card key={index} className="mb-3">
-                <Card.Body className="d-flex align-items-center">
-                  <Form.Check
-                    type="checkbox"
-                    id={`flashcard-check-${index}`}
-                    className="me-3"
-                    onChange={() => handleFlashcardSelection(card)}
-                    checked={selectedFlashcards.some(sc => sc.english_sentence === card.english_sentence)}
-                  />
-                  <div>
-                    <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} />
-                    <Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${card.portuguese_translation}` }} />
-                    <small className="text-info">Tradução do Termo: {card.term_translation}</small>
-                  </div>
+              <Card key={card.id} className="mb-3">
+                <Card.Body>
+                  {editingCardIndex === index && editingCardContent ? (
+                    // Modo de Edição
+                    <>
+                      <Form.Group className="mb-2">
+                        <Form.Label><small>Frase em Inglês</small></Form.Label>
+                        <Form.Control as="textarea" rows={2} name="english_sentence" value={editingCardContent.english_sentence} onChange={handleEditingCardChange} />
+                      </Form.Group>
+                      <Form.Group className="mb-2">
+                        <Form.Label><small>Tradução da Frase</small></Form.Label>
+                        <Form.Control as="textarea" rows={2} name="portuguese_translation" value={editingCardContent.portuguese_translation} onChange={handleEditingCardChange} />
+                      </Form.Group>
+                      <Form.Group className="mb-3">
+                        <Form.Label><small>Tradução do Termo</small></Form.Label>
+                        <Form.Control type="text" name="term_translation" value={editingCardContent.term_translation} onChange={handleEditingCardChange} />
+                      </Form.Group>
+                      <div className="d-flex justify-content-end">
+                        <Button variant="secondary" size="sm" onClick={handleCancelEdit} className="me-2">Cancelar</Button>
+                        <Button variant="primary" size="sm" onClick={handleSaveCard}>Salvar</Button>
+                      </div>
+                    </>
+                  ) : (
+                    // Modo de Visualização
+                    <div className="d-flex justify-content-between align-items-start">
+                      <div className="flex-grow-1">
+                        {index < 4 ? (
+                          <Badge bg="primary" className="mb-2">Contexto do Vídeo</Badge>
+                        ) : (
+                          <Badge bg="secondary" className="mb-2">Outros Contextos</Badge>
+                        )}
+                        <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} />
+                        <Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${card.portuguese_translation}` }} />
+                        <small className="text-info">Tradução do Termo: {card.term_translation}</small>
+                      </div>
+                      <div className="d-flex flex-column align-items-end ms-3">
+                        <Form.Check
+                          type="checkbox"
+                          id={`flashcard-check-${index}`}
+                          className="flex-shrink-0 mb-2"
+                          onChange={() => handleFlashcardSelection(card)}
+                          checked={selectedFlashcards.some(sc => sc.id === card.id)}
+                          disabled={editingCardIndex !== null}
+                        />
+                        <Button variant="outline-secondary" size="sm" onClick={() => handleEditCard(index)} disabled={editingCardIndex !== null}>
+                          Editar
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </Card.Body>
               </Card>
             ))}

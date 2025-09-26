@@ -86,6 +86,10 @@ class VideoRequest(BaseModel):
 
 class FlashcardRequest(BaseModel):
     words: List[str]
+    previous_subtitle: str | None = None
+    current_subtitle: str | None = None
+    next_subtitle: str | None = None
+
 
 class GeneratedFlashcard(BaseModel):
     english_sentence: str
@@ -132,33 +136,51 @@ def generate_flashcards(request: FlashcardRequest):
     if not os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") == "FAKE_KEY_FOR_INITIALIZATION":
         raise HTTPException(status_code=400, detail="A chave da API do Gemini não foi configurada no servidor.")
 
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash-001')
     term = " ".join(request.words)
 
+    # Constrói a string de contexto
+    context = ""
+    if request.previous_subtitle:
+        context += f"Legenda anterior: {request.previous_subtitle}\n"
+    if request.current_subtitle:
+        context += f"Legenda atual (onde o termo foi selecionado): {request.current_subtitle}\n"
+    if request.next_subtitle:
+        context += f"Próxima legenda: {request.next_subtitle}\n"
+
     prompt = f"""
-    Crie 3 flashcards para o seguinte termo ou expressão em inglês: "{term}".
+    Você é um assistente de aprendizado de idiomas. Sua tarefa é criar flashcards para o termo em inglês "{term}".
 
-    Para cada flashcard, forneça:
-    1. Uma frase de exemplo em inglês, usando o termo. Na frase, coloque o termo "{term}" em negrito usando tags <b>.
-    2. A tradução completa dessa frase para o português brasileiro. Na tradução, coloque a tradução do termo também em negrito usando tags <b>.
-    3. A tradução específica do termo "{term}" DENTRO do contexto da frase, em português.
+    **Contexto do vídeo:**
+    {context}
 
-    Formate a sua resposta EXATAMENTE como um JSON contendo uma lista de objetos.
-    Cada objeto deve ter as chaves "english_sentence", "portuguese_translation" e "term_translation".
-    Não inclua nenhuma formatação extra, como markdown (`json` ou ```).
+    **Instruções:**
+    1. Analise o contexto fornecido para entender o significado de "{term}".
+    2. Crie um total de 10 flashcards.
+    3. Os **4 primeiros flashcards** DEVEM usar o significado de "{term}" como ele aparece no contexto do vídeo. As frases de exemplo devem ser semelhantes ao contexto.
+    4. Os **próximos 6 flashcards** DEVEM mostrar diferentes significados ou usos de "{term}" em vários outros contextos.
+    5. Para cada flashcard, forneça:
+        - "english_sentence": Uma frase de exemplo em inglês, com o termo "{term}" em negrito (<b>{term}</b>).
+        - "portuguese_translation": A tradução completa da frase para o português brasileiro, com a tradução do termo também em negrito (<b>tradução</b>).
+        - "term_translation": A tradução específica de "{term}" dentro do contexto dessa frase.
 
-    Exemplo de formato de resposta para o termo "fast":
+    **Formato de Saída:**
+    Sua resposta DEVE ser uma lista JSON válida de 10 objetos, sem formatação extra ou markdown.
+
+    **Exemplo para o termo "fast" no contexto de corrida:**
     [
         {{
-            "english_sentence": "He is running <b>fast</b>.",
-            "portuguese_translation": "Ele está correndo <b>rápido</b>.",
+            "english_sentence": "In the race, he was incredibly <b>fast</b>.",
+            "portuguese_translation": "Na corrida, ele foi incrivelmente <b>rápido</b>.",
             "term_translation": "rápido"
         }},
+        // ... mais 3 exemplos baseados no contexto
         {{
-            "english_sentence": "The monk will <b>fast</b> for a day.",
-            "portuguese_translation": "O monge vai <b>jejuar</b> por um dia.",
+            "english_sentence": "Some religions require people to <b>fast</b> during certain periods.",
+            "portuguese_translation": "Algumas religiões exigem que as pessoas <b>jejuem</b> durante certos períodos.",
             "term_translation": "jejuar"
         }}
+        // ... mais 5 exemplos diversos
     ]
     """
 
