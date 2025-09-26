@@ -107,6 +107,14 @@ class CardProcessingRequest(BaseModel):
 class VttUploadRequest(BaseModel):
     vtt_content: str
 
+class MoreFlashcardsRequest(BaseModel):
+    words: List[str]
+    previous_subtitle: str | None = None
+    current_subtitle: str | None = None
+    next_subtitle: str | None = None
+    existing_flashcards: List[GeneratedFlashcard]
+    context_type: str  # 'in_context' or 'out_of_context'
+
 # --- Funções Helper ---
 def get_base_term(term: str) -> str:
     """Lematiza o termo. Se for uma expressão, lematiza cada palavra."""
@@ -156,32 +164,16 @@ def generate_flashcards(request: FlashcardRequest):
 
     **Instruções:**
     1. Analise o contexto fornecido para entender o significado de "{term}".
-    2. Crie um total de 10 flashcards.
-    3. Os **4 primeiros flashcards** DEVEM usar o significado de "{term}" como ele aparece no contexto do vídeo. As frases de exemplo devem ser semelhantes ao contexto.
-    4. Os **próximos 6 flashcards** DEVEM mostrar diferentes significados ou usos de "{term}" em vários outros contextos.
+    2. Crie um total de 4 flashcards.
+    3. Os **2 primeiros flashcards** DEVEM usar o significado de "{term}" como ele aparece no contexto do vídeo. As frases de exemplo devem ser semelhantes ao contexto.
+    4. Os **próximos 2 flashcards** DEVEM mostrar diferentes significados ou usos de "{term}" em vários outros contextos.
     5. Para cada flashcard, forneça:
         - "english_sentence": Uma frase de exemplo em inglês, com o termo "{term}" em negrito (<b>{term}</b>).
         - "portuguese_translation": A tradução completa da frase para o português brasileiro, com a tradução do termo também em negrito (<b>tradução</b>).
         - "term_translation": A tradução específica de "{term}" dentro do contexto dessa frase.
 
     **Formato de Saída:**
-    Sua resposta DEVE ser uma lista JSON válida de 10 objetos, sem formatação extra ou markdown.
-
-    **Exemplo para o termo "fast" no contexto de corrida:**
-    [
-        {{
-            "english_sentence": "In the race, he was incredibly <b>fast</b>.",
-            "portuguese_translation": "Na corrida, ele foi incrivelmente <b>rápido</b>.",
-            "term_translation": "rápido"
-        }},
-        // ... mais 3 exemplos baseados no contexto
-        {{
-            "english_sentence": "Some religions require people to <b>fast</b> during certain periods.",
-            "portuguese_translation": "Algumas religiões exigem que as pessoas <b>jejuem</b> durante certos períodos.",
-            "term_translation": "jejuar"
-        }}
-        // ... mais 5 exemplos diversos
-    ]
+    Sua resposta DEVE ser uma lista JSON válida de 4 objetos, sem formatação extra ou markdown.
     """
 
     try:
@@ -189,7 +181,6 @@ def generate_flashcards(request: FlashcardRequest):
         # Limpa a resposta para garantir que seja um JSON válido
         cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         
-        # A IA agora retorna o HTML diretamente, então não precisamos mais processar aqui
         raw_flashcards = json.loads(cleaned_response_text)
 
         return {"flashcards": raw_flashcards}
@@ -198,6 +189,73 @@ def generate_flashcards(request: FlashcardRequest):
         raise HTTPException(status_code=500, detail="Erro ao decodificar a resposta da IA. A resposta não foi um JSON válido.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar flashcards: {e}")
+
+@app.post("/api/generate-more-flashcards")
+def generate_more_flashcards(request: MoreFlashcardsRequest):
+    if not os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") == "FAKE_KEY_FOR_INITIALIZATION":
+        raise HTTPException(status_code=400, detail="A chave da API do Gemini não foi configurada no servidor.")
+
+    model = genai.GenerativeModel('gemini-2.0-flash-001')
+    term = " ".join(request.words)
+
+    # Constrói a string de contexto
+    context = ""
+    if request.previous_subtitle:
+        context += f"Legenda anterior: {request.previous_subtitle}\n"
+    if request.current_subtitle:
+        context += f"Legenda atual (onde o termo foi selecionado): {request.current_subtitle}\n"
+    if request.next_subtitle:
+        context += f"Próxima legenda: {request.next_subtitle}\n"
+
+    existing_cards_str = json.dumps([card.dict() for card in request.existing_flashcards], indent=2)
+
+    if request.context_type == 'in_context':
+        prompt = f"""
+        Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
+
+        **Contexto do vídeo:**
+        {context}
+
+        **Instruções:**
+        1. Você deve gerar 2 novos flashcards que usem o significado de "{term}" como ele aparece no contexto do vídeo.
+        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+
+        **Flashcards Existentes (NÃO repita estes):**
+        {existing_cards_str}
+
+        **Formato de Saída:**
+        Sua resposta DEVE ser uma lista JSON válida de 2 novos objetos.
+        """
+    else:  # out_of_context
+        prompt = f"""
+        Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
+
+        **Instruções:**
+        1. Você deve gerar 2 novos flashcards que mostrem diferentes significados ou usos de "{term}" em vários outros contextos (NÃO o contexto do vídeo).
+        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+
+        **Flashcards Existentes (NÃO repita estes):**
+        {existing_cards_str}
+
+        **Contexto do Vídeo (para referência, para EVITAR este contexto):**
+        {context}
+
+        **Formato de Saída:**
+        Sua resposta DEVE ser uma lista JSON válida de 2 novos objetos.
+        """
+
+    try:
+        response = model.generate_content(prompt)
+        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        new_flashcards = json.loads(cleaned_response_text)
+        return {"flashcards": new_flashcards}
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Erro ao decodificar a resposta da IA.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar mais flashcards: {e}")
 
 @app.post("/api/check-duplicates")
 def check_duplicates(request: CardProcessingRequest):
