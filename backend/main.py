@@ -89,6 +89,7 @@ class FlashcardRequest(BaseModel):
     previous_subtitle: str | None = None
     current_subtitle: str | None = None
     next_subtitle: str | None = None
+    custom_themes: List[str] | None = None
 
 
 class GeneratedFlashcard(BaseModel):
@@ -114,6 +115,7 @@ class MoreFlashcardsRequest(BaseModel):
     next_subtitle: str | None = None
     existing_flashcards: List[GeneratedFlashcard]
     context_type: str  # 'in_context' or 'out_of_context'
+    custom_themes: List[str] | None = None
 
 # --- Funções Helper ---
 def get_base_term(term: str) -> str:
@@ -156,21 +158,33 @@ def generate_flashcards(request: FlashcardRequest):
     if request.next_subtitle:
         context += f"Próxima legenda: {request.next_subtitle}\n"
 
+    # Constrói o prompt de temas, se houver
+    themes_prompt_part = ""
+    if request.custom_themes:
+        themes_str = ", ".join(request.custom_themes)
+        themes_prompt_part = f"Para estes próximos 2 flashcards, crie frases de exemplo baseadas nos seguintes temas de interesse: **{themes_str}**."
+
     prompt = f"""
     Você é um assistente de aprendizado de idiomas. Sua tarefa é criar flashcards para o termo em inglês "{term}".
 
     **Contexto do vídeo:**
     {context}
 
-    **Instruções:**
-    1. Analise o contexto fornecido para entender o significado de "{term}".
-    2. Crie um total de 4 flashcards.
-    3. Os **2 primeiros flashcards** DEVEM usar o significado de "{term}" como ele aparece no contexto do vídeo. As frases de exemplo devem ser semelhantes ao contexto.
-    4. Os **próximos 2 flashcards** DEVEM mostrar diferentes significados ou usos de "{term}" em vários outros contextos.
-    5. Para cada flashcard, forneça:
+    **Instruções Gerais:**
+    1. Crie um total de 4 flashcards.
+    2. Para cada flashcard, forneça:
         - "english_sentence": Uma frase de exemplo em inglês, com o termo "{term}" em negrito (<b>{term}</b>).
         - "portuguese_translation": A tradução completa da frase para o português brasileiro, com a tradução do termo também em negrito (<b>tradução</b>).
         - "term_translation": A tradução específica de "{term}" dentro do contexto dessa frase.
+
+    **Instruções para os 2 PRIMEIROS flashcards:**
+    - Analise o **Contexto do vídeo** para entender o **sentido exato** de "{term}" naquela situação.
+    - Crie 2 frases de exemplo que usem "{term}" com esse **mesmo sentido**.
+    - **Importante**: As frases de exemplo **NÃO** precisam ser sobre o mesmo assunto do vídeo. Elas devem ser frases genéricas e claras que qualquer estudante de inglês possa entender e usar. O foco é o **sentido** da palavra, não o tema do vídeo.
+
+    **Instruções para os 2 ÚLTIMOS flashcards:**
+    - Mostre diferentes significados ou usos de "{term}" que sejam distintos do sentido identificado no contexto do vídeo.
+    - {themes_prompt_part if themes_prompt_part else "Crie frases em contextos variados e de interesse geral."}
 
     **Formato de Saída:**
     Sua resposta DEVE ser uma lista JSON válida de 4 objetos, sem formatação extra ou markdown.
@@ -213,13 +227,14 @@ def generate_more_flashcards(request: MoreFlashcardsRequest):
         prompt = f"""
         Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
 
-        **Contexto do vídeo:**
+        **Contexto do vídeo (para análise do sentido):**
         {context}
 
         **Instruções:**
-        1. Você deve gerar 2 novos flashcards que usem o significado de "{term}" como ele aparece no contexto do vídeo.
-        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
-        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+        1. Você deve gerar 2 novos flashcards que usem o **mesmo sentido** de "{term}" identificado no contexto acima.
+        2. As frases de exemplo **NÃO** precisam ser sobre o tema do vídeo. Crie frases genéricas e claras.
+        3. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        4. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
 
         **Flashcards Existentes (NÃO repita estes):**
         {existing_cards_str}
@@ -228,18 +243,26 @@ def generate_more_flashcards(request: MoreFlashcardsRequest):
         Sua resposta DEVE ser uma lista JSON válida de 2 novos objetos.
         """
     else:  # out_of_context
+        themes_prompt_part = ""
+        if request.custom_themes:
+            themes_str = ", ".join(request.custom_themes)
+            themes_prompt_part = f"Crie frases de exemplo baseadas nos seguintes temas de interesse: **{themes_str}**."
+        else:
+            themes_prompt_part = "Crie frases em contextos variados e de interesse geral."
+
         prompt = f"""
         Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
 
         **Instruções:**
-        1. Você deve gerar 2 novos flashcards que mostrem diferentes significados ou usos de "{term}" em vários outros contextos (NÃO o contexto do vídeo).
-        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
-        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+        1. Você deve gerar 2 novos flashcards que mostrem **diferentes significados ou usos** de "{term}".
+        2. {themes_prompt_part}
+        3. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        4. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
 
         **Flashcards Existentes (NÃO repita estes):**
         {existing_cards_str}
 
-        **Contexto do Vídeo (para referência, para EVITAR este contexto):**
+        **Contexto do Vídeo (para referência, para EVITAR o sentido usado nele):**
         {context}
 
         **Formato de Saída:**

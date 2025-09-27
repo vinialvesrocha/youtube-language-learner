@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import YouTube, { YouTubeProps } from 'react-youtube';
-import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge } from 'react-bootstrap';
+import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge, ListGroup } from 'react-bootstrap';
 import './App.css';
 
 // --- Interfaces e Funções Helper ---
@@ -20,6 +20,14 @@ interface Flashcard {
 interface ConfirmationCard {
   flashcard: Flashcard;
   is_duplicate: boolean;
+}
+
+interface Video {
+  videoUrl: string;
+  videoId: string;
+  videoTitle: string;
+  thumbnailUrl: string;
+  subtitles: Subtitle[];
 }
 
 const getYouTubeId = (url: string): string | null => {
@@ -45,6 +53,9 @@ const timeToSeconds = (time: string): number => {
 function App() {
   // Estado da UI
   const [videoUrl, setVideoUrl] = useState('');
+  const [customThemes, setCustomThemes] = useState('');
+  const [videoHistory, setVideoHistory] = useState<Video[]>([]);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -75,6 +86,59 @@ function App() {
   const [isGeneratingMore, setIsGeneratingMore] = useState({ in_context: false, out_of_context: false });
   const [inContextCount, setInContextCount] = useState(2);
 
+  // Efeito para carregar dados do localStorage na inicialização
+  useEffect(() => {
+    const savedThemes = localStorage.getItem('customThemes');
+    if (savedThemes) {
+      setCustomThemes(savedThemes);
+    }
+    const savedHistory = localStorage.getItem('videoHistory');
+    if (savedHistory) {
+      setVideoHistory(JSON.parse(savedHistory));
+    }
+    setIsInitialLoad(false);
+  }, []);
+
+  // Efeito para salvar temas no localStorage
+  useEffect(() => {
+    if (!isInitialLoad) {
+      localStorage.setItem('customThemes', customThemes);
+    }
+  }, [customThemes, isInitialLoad]);
+
+  // Efeito para salvar histórico no localStorage
+  useEffect(() => {
+    localStorage.setItem('videoHistory', JSON.stringify(videoHistory));
+  }, [videoHistory, isInitialLoad]);
+
+  // Efeito para tocar/pausar com a barra de espaço
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignora se estiver digitando em um input ou textarea
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      // Verifica se a tecla é a barra de espaço
+      if (event.code === 'Space' && player) {
+        event.preventDefault(); // Previne o scroll da página
+        const playerState = player.getPlayerState();
+        if (playerState === 1) { // 1: playing
+          player.pauseVideo();
+        } else { // 2: paused, -1: unstarted, 0: ended, 3: buffering, 5: cued
+          player.playVideo();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Limpa o event listener ao desmontar o componente
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [player]); // Depende do objeto do player para funcionar
 
   // Efeito para buscar legenda atual
   useEffect(() => {
@@ -132,6 +196,20 @@ function App() {
       }
       const data = await response.json();
       setSubtitles(data.subtitles);
+
+      // Adiciona ao histórico
+      const newVideo: Video = {
+        videoUrl: videoUrl,
+        videoId: data.video_id,
+        videoTitle: data.video_title,
+        thumbnailUrl: `https://img.youtube.com/vi/${data.video_id}/mqdefault.jpg`,
+        subtitles: data.subtitles,
+      };
+
+      // Evita adicionar duplicatas
+      if (!videoHistory.some(v => v.videoId === newVideo.videoId)) {
+        setVideoHistory(prev => [newVideo, ...prev]);
+      }
     } catch (err: any) {
       setError(err.message || 'Erro desconhecido.');
       setVideoId(null);
@@ -185,6 +263,20 @@ function App() {
 
             const data = await response.json();
             setSubtitles(data.subtitles);
+
+            // Adiciona ao histórico
+            const newVideo: Video = {
+              videoUrl: videoUrl, // A URL que já estava no input
+              videoId: id,      // O ID extraído da URL
+              videoTitle: videoUrl, // Usa a URL como título, já que não temos o título real
+              thumbnailUrl: `https://img.youtube.com/vi/${id}/mqdefault.jpg`,
+              subtitles: data.subtitles,
+            };
+
+            // Evita adicionar duplicatas
+            if (!videoHistory.some(v => v.videoId === newVideo.videoId)) {
+              setVideoHistory(prev => [newVideo, ...prev]);
+            }
         } catch (err: any) {
             setError(err.message || 'Erro desconhecido ao processar o arquivo.');
         } finally {
@@ -196,6 +288,20 @@ function App() {
         setIsLoading(false);
     };
     reader.readAsText(file);
+  };
+
+  const handleLoadFromHistory = (video: Video) => {
+    setError('');
+    setVideoUrl(video.videoUrl);
+    setVideoId(video.videoId);
+    setSubtitles(video.subtitles);
+    setCurrentSubtitle('');
+    setSelectedWords([]);
+    // Rola a página para o player de vídeo
+    setTimeout(() => {
+      const playerElement = document.querySelector('.player-wrapper');
+      playerElement?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
   };
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
@@ -237,6 +343,8 @@ function App() {
     const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
     const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
 
+    const themesArray = customThemes.split(',').map(t => t.trim()).filter(t => t);
+
     try {
       const response = await fetch('http://localhost:8000/api/generate-flashcards', {
         method: 'POST',
@@ -246,6 +354,7 @@ function App() {
           previous_subtitle: previousSubtitle,
           current_subtitle: currentSubtitle,
           next_subtitle: nextSubtitle,
+          custom_themes: themesArray.length > 0 ? themesArray : undefined,
         }),
       });
       if (!response.ok) {
@@ -382,6 +491,8 @@ function App() {
     const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
     const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
 
+    const themesArray = customThemes.split(',').map(t => t.trim()).filter(t => t);
+
     try {
       const response = await fetch('http://localhost:8000/api/generate-more-flashcards', {
         method: 'POST',
@@ -393,6 +504,7 @@ function App() {
           next_subtitle: nextSubtitle,
           existing_flashcards: generatedFlashcards,
           context_type: contextType,
+          custom_themes: themesArray.length > 0 ? themesArray : undefined,
         }),
       });
 
@@ -426,6 +538,7 @@ function App() {
   const opts: YouTubeProps['opts'] = {
     playerVars: {
       autoplay: 0,
+      rel: 0, // Não mostrar vídeos relacionados ao pausar
     },
   };
 
@@ -553,6 +666,19 @@ function App() {
       <Navbar bg="dark" variant="dark"><Container><Navbar.Brand>YouTube Language Learner</Navbar.Brand></Container></Navbar>
       <Container className="mt-4 pb-5"> {/* Padding bottom para não sobrepor o botão */}
         <div className="mb-4 p-4 border rounded">
+          <Form.Group className="mb-3">
+            <Form.Label>Temas de Interesse (opcional)</Form.Label>
+            <Form.Control
+              type="text"
+              placeholder="Ex: tecnologia, história, culinária..."
+              value={customThemes}
+              onChange={(e) => setCustomThemes(e.target.value)}
+              disabled={isLoading}
+            />
+            <Form.Text className="text-muted">
+              Separe os temas com vírgulas para gerar exemplos de seu interesse.
+            </Form.Text>
+          </Form.Group>
           <InputGroup>
             <Form.Control
               placeholder="Cole a URL de um vídeo do YouTube..."
@@ -576,6 +702,25 @@ function App() {
           />
           {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
         </div>
+
+        {videoHistory.length > 0 && (
+          <div className="mb-4 p-4 border rounded">
+            <h5 className="mb-3">Histórico</h5>
+            <ListGroup variant="flush">
+              {videoHistory.map(video => (
+                <ListGroup.Item key={video.videoId} className="d-flex justify-content-between align-items-center">
+                  <img src={video.thumbnailUrl} alt={`Thumbnail for ${video.videoTitle}`} className="me-3 img-thumbnail" style={{ width: '120px' }} />
+                  <div className="flex-grow-1">
+                    {video.videoTitle}
+                  </div>
+                  <Button variant="outline-secondary" size="sm" onClick={() => handleLoadFromHistory(video)}>
+                    Carregar
+                  </Button>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </div>
+        )}
 
         {videoId && (
           <div className="player-wrapper">
