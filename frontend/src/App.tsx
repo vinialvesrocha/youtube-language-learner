@@ -11,6 +11,7 @@ interface Subtitle {
 }
 
 interface Flashcard {
+  id: string;
   english_sentence: string;
   portuguese_translation: string;
   term_translation: string;
@@ -53,6 +54,7 @@ function App() {
   const [currentSubtitle, setCurrentSubtitle] = useState('');
   const [player, setPlayer] = useState<any | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Estado para seleção de palavras e flashcards
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
@@ -68,6 +70,10 @@ function App() {
   const [isProcessingAnki, setIsProcessingAnki] = useState(false);
   const [ankiStatusMessage, setAnkiStatusMessage] = useState('');
   const [cardsForConfirmation, setCardsForConfirmation] = useState<ConfirmationCard[]>([]);
+  const [editingCardIndex, setEditingCardIndex] = useState<number | null>(null);
+  const [editingCardContent, setEditingCardContent] = useState<Flashcard | null>(null);
+  const [isGeneratingMore, setIsGeneratingMore] = useState({ in_context: false, out_of_context: false });
+  const [inContextCount, setInContextCount] = useState(2);
 
 
   // Efeito para buscar legenda atual
@@ -134,6 +140,64 @@ function App() {
     }
   };
 
+  const handleVttFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Get video ID from URL input
+    const id = getYouTubeId(videoUrl);
+    if (!id) {
+      setError('Por favor, insira uma URL de vídeo válida antes de subir a legenda.');
+      // Clear the file input so the user can try again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+      return;
+    }
+
+    setIsLoading(true);
+    setError('');
+    setSubtitles([]);
+    setCurrentSubtitle('');
+    setSelectedWords([]);
+    setVideoId(id); // Set the video ID to load the player
+
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+        const content = e.target?.result;
+        if (typeof content !== 'string') {
+            setError('Não foi possível ler o arquivo VTT.');
+            setIsLoading(false);
+            return;
+        }
+
+        try {
+            const response = await fetch('http://localhost:8000/api/process-vtt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ vtt_content: content }),
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.detail || 'Erro ao processar o arquivo VTT.');
+            }
+
+            const data = await response.json();
+            setSubtitles(data.subtitles);
+        } catch (err: any) {
+            setError(err.message || 'Erro desconhecido ao processar o arquivo.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    reader.onerror = () => {
+        setError('Erro ao ler o arquivo.');
+        setIsLoading(false);
+    };
+    reader.readAsText(file);
+  };
+
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     setPlayer(event.target);
   };
@@ -167,19 +231,33 @@ function App() {
     setAnkiStatusMessage('');
     setModalStep('selection');
     setShowFlashcardModal(true);
+    setInContextCount(2); // Reseta a contagem
+
+    const currentIndex = subtitles.findIndex(sub => sub.text === currentSubtitle);
+    const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
+    const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
 
     try {
       const response = await fetch('http://localhost:8000/api/generate-flashcards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words: selectedWords }),
+        body: JSON.stringify({
+          words: selectedWords,
+          previous_subtitle: previousSubtitle,
+          current_subtitle: currentSubtitle,
+          next_subtitle: nextSubtitle,
+        }),
       });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.detail || 'Erro ao gerar flashcards.');
       }
       const data = await response.json();
-      setGeneratedFlashcards(data.flashcards);
+      const flashcardsWithId = data.flashcards.map((card: Omit<Flashcard, 'id'>, index: number) => ({
+        ...card,
+        id: `temp-id-${index}-${Date.now()}`
+      }));
+      setGeneratedFlashcards(flashcardsWithId);
     } catch (err: any) {
       setFlashcardError(err.message || 'Não foi possível conectar ao servidor.');
     } finally {
@@ -189,13 +267,9 @@ function App() {
 
   const handleFlashcardSelection = (card: Flashcard) => {
     setSelectedFlashcards(prev => {
-      const isSelected = prev.some(
-        selectedCard => selectedCard.english_sentence === card.english_sentence
-      );
+      const isSelected = prev.some(selectedCard => selectedCard.id === card.id);
       if (isSelected) {
-        return prev.filter(
-          selectedCard => selectedCard.english_sentence !== card.english_sentence
-        );
+        return prev.filter(selectedCard => selectedCard.id !== card.id);
       } else {
         return [...prev, card];
       }
@@ -265,9 +339,91 @@ function App() {
     }
   };
 
+  const handleEditCard = (index: number) => {
+    setEditingCardIndex(index);
+    setEditingCardContent(generatedFlashcards[index]);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCardIndex(null);
+    setEditingCardContent(null);
+  };
+
+  const handleSaveCard = () => {
+    if (editingCardIndex === null || !editingCardContent) return;
+
+    const updatedFlashcards = [...generatedFlashcards];
+    updatedFlashcards[editingCardIndex] = editingCardContent;
+    setGeneratedFlashcards(updatedFlashcards);
+
+    // Atualiza também o card selecionado, se for o caso
+    const isSelected = selectedFlashcards.some(card => card.id === editingCardContent.id);
+    if (isSelected) {
+        const updatedSelected = selectedFlashcards.map(card => 
+            card.id === editingCardContent.id ? editingCardContent : card
+        );
+        setSelectedFlashcards(updatedSelected);
+    }
+
+    handleCancelEdit();
+  };
+
+  const handleEditingCardChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!editingCardContent) return;
+    const { name, value } = e.target;
+    setEditingCardContent({ ...editingCardContent, [name]: value });
+  };
+
+  const handleGenerateMore = async (contextType: 'in_context' | 'out_of_context') => {
+    setIsGeneratingMore(prev => ({ ...prev, [contextType]: true }));
+    setFlashcardError('');
+
+    const currentIndex = subtitles.findIndex(sub => sub.text === currentSubtitle);
+    const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
+    const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
+
+    try {
+      const response = await fetch('http://localhost:8000/api/generate-more-flashcards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          words: selectedWords,
+          previous_subtitle: previousSubtitle,
+          current_subtitle: currentSubtitle,
+          next_subtitle: nextSubtitle,
+          existing_flashcards: generatedFlashcards,
+          context_type: contextType,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Erro ao gerar mais flashcards.');
+      }
+
+      const data = await response.json();
+      const newFlashcards = data.flashcards.map((card: Omit<Flashcard, 'id'>, index: number) => ({
+        ...card,
+        id: `temp-id-more-${contextType}-${index}-${Date.now()}`
+      }));
+
+      if (contextType === 'in_context') {
+        const newGenerated = [...generatedFlashcards];
+        newGenerated.splice(inContextCount, 0, ...newFlashcards);
+        setGeneratedFlashcards(newGenerated);
+        setInContextCount(prev => prev + newFlashcards.length);
+      } else {
+        setGeneratedFlashcards(prev => [...prev, ...newFlashcards]);
+      }
+
+    } catch (err: any) {
+      setFlashcardError(err.message || 'Não foi possível conectar ao servidor.');
+    } finally {
+      setIsGeneratingMore(prev => ({ ...prev, [contextType]: false }));
+    }
+  };
+
   const opts: YouTubeProps['opts'] = {
-    height: '390',
-    width: '640',
     playerVars: {
       autoplay: 0,
     },
@@ -276,26 +432,62 @@ function App() {
   const renderModalContent = () => {
     switch (modalStep) {
       case 'selection':
+        const inContextCards = generatedFlashcards.slice(0, inContextCount);
+        const outOfContextCards = generatedFlashcards.slice(inContextCount);
+
         return (
           <Form>
-            {generatedFlashcards.map((card, index) => (
-              <Card key={index} className="mb-3">
-                <Card.Body className="d-flex align-items-center">
-                  <Form.Check
-                    type="checkbox"
-                    id={`flashcard-check-${index}`}
-                    className="me-3"
-                    onChange={() => handleFlashcardSelection(card)}
-                    checked={selectedFlashcards.some(sc => sc.english_sentence === card.english_sentence)}
-                  />
-                  <div>
-                    <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} />
-                    <Card.Text className="text-muted"><strong>Português:</strong> {card.portuguese_translation}</Card.Text>
-                    <small className="text-info">Tradução do Termo: {card.term_translation}</small>
-                  </div>
+            <h5>Contexto do Vídeo</h5>
+            {inContextCards.map((card, index) => (
+              <Card key={card.id} className="mb-3">
+                <Card.Body>
+                  {editingCardIndex === index && editingCardContent ? (
+                    <>
+                      <Form.Group className="mb-2"><Form.Label><small>Frase em Inglês</small></Form.Label><Form.Control as="textarea" rows={2} name="english_sentence" value={editingCardContent.english_sentence} onChange={handleEditingCardChange} /></Form.Group>
+                      <Form.Group className="mb-2"><Form.Label><small>Tradução da Frase</small></Form.Label><Form.Control as="textarea" rows={2} name="portuguese_translation" value={editingCardContent.portuguese_translation} onChange={handleEditingCardChange} /></Form.Group>
+                      <Form.Group className="mb-3"><Form.Label><small>Tradução do Termo</small></Form.Label><Form.Control type="text" name="term_translation" value={editingCardContent.term_translation} onChange={handleEditingCardChange} /></Form.Group>
+                      <div className="d-flex justify-content-end"><Button variant="secondary" size="sm" onClick={handleCancelEdit} className="me-2">Cancelar</Button><Button variant="primary" size="sm" onClick={handleSaveCard}>Salvar</Button></div>
+                    </>
+                  ) : (
+                    <div className="d-flex justify-content-between align-items-start">
+                      <div className="flex-grow-1"><Badge bg="primary" className="mb-2">Contexto do Vídeo</Badge><Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} /><Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${card.portuguese_translation}` }} /><small className="text-info">Tradução do Termo: {card.term_translation}</small></div>
+                      <div className="d-flex flex-column align-items-end ms-3"><Form.Check type="checkbox" id={`flashcard-check-${index}`} className="flex-shrink-0 mb-2" onChange={() => handleFlashcardSelection(card)} checked={selectedFlashcards.some(sc => sc.id === card.id)} disabled={editingCardIndex !== null} /><Button variant="outline-secondary" size="sm" onClick={() => handleEditCard(index)} disabled={editingCardIndex !== null}>Editar</Button></div>
+                    </div>
+                  )}
                 </Card.Body>
               </Card>
             ))}
+            <div className="d-grid mb-4">
+                <Button variant="light" onClick={() => handleGenerateMore('in_context')} disabled={isGeneratingMore.in_context || editingCardIndex !== null}>
+                    {isGeneratingMore.in_context ? <Spinner size="sm" /> : 'Gerar mais 2 exemplos contextuais'}
+                </Button>
+            </div>
+
+            <h5>Outros Contextos</h5>
+            {outOfContextCards.map((card, index) => (
+                <Card key={card.id} className="mb-3">
+                    <Card.Body>
+                        {editingCardIndex === (index + inContextCount) && editingCardContent ? (
+                            <>
+                                <Form.Group className="mb-2"><Form.Label><small>Frase em Inglês</small></Form.Label><Form.Control as="textarea" rows={2} name="english_sentence" value={editingCardContent.english_sentence} onChange={handleEditingCardChange} /></Form.Group>
+                                <Form.Group className="mb-2"><Form.Label><small>Tradução da Frase</small></Form.Label><Form.Control as="textarea" rows={2} name="portuguese_translation" value={editingCardContent.portuguese_translation} onChange={handleEditingCardChange} /></Form.Group>
+                                <Form.Group className="mb-3"><Form.Label><small>Tradução do Termo</small></Form.Label><Form.Control type="text" name="term_translation" value={editingCardContent.term_translation} onChange={handleEditingCardChange} /></Form.Group>
+                                <div className="d-flex justify-content-end"><Button variant="secondary" size="sm" onClick={handleCancelEdit} className="me-2">Cancelar</Button><Button variant="primary" size="sm" onClick={handleSaveCard}>Salvar</Button></div>
+                            </>
+                        ) : (
+                            <div className="d-flex justify-content-between align-items-start">
+                                <div className="flex-grow-1"><Badge bg="secondary" className="mb-2">Outros Contextos</Badge><Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${card.english_sentence}` }} /><Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${card.portuguese_translation}` }} /><small className="text-info">Tradução do Termo: {card.term_translation}</small></div>
+                                <div className="d-flex flex-column align-items-end ms-3"><Form.Check type="checkbox" id={`flashcard-check-${index + inContextCount}`} className="flex-shrink-0 mb-2" onChange={() => handleFlashcardSelection(card)} checked={selectedFlashcards.some(sc => sc.id === card.id)} disabled={editingCardIndex !== null} /><Button variant="outline-secondary" size="sm" onClick={() => handleEditCard(index + inContextCount)} disabled={editingCardIndex !== null}>Editar</Button></div>
+                            </div>
+                        )}
+                    </Card.Body>
+                </Card>
+            ))}
+            <div className="d-grid">
+                <Button variant="light" onClick={() => handleGenerateMore('out_of_context')} disabled={isGeneratingMore.out_of_context || editingCardIndex !== null}>
+                    {isGeneratingMore.out_of_context ? <Spinner size="sm" /> : 'Gerar mais 2 exemplos diversos'}
+                </Button>
+            </div>
           </Form>
         );
       case 'checking':
@@ -314,7 +506,7 @@ function App() {
                 <Card.Body>
                   {item.is_duplicate && <Badge bg="warning" className="mb-2">DUPLICATA</Badge>}
                   <Card.Text dangerouslySetInnerHTML={{ __html: `<strong>Inglês:</strong> ${item.flashcard.english_sentence}` }} />
-                  <Card.Text className="text-muted"><strong>Português:</strong> {item.flashcard.portuguese_translation}</Card.Text>
+                  <Card.Text className="text-muted" dangerouslySetInnerHTML={{ __html: `<strong>Português:</strong> ${item.flashcard.portuguese_translation}` }} />
                   <small className="text-info">Tradução do Termo: {item.flashcard.term_translation}</small>
                 </Card.Body>
               </Card>
@@ -371,12 +563,22 @@ function App() {
             <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
               {isLoading ? <Spinner size="sm" /> : 'Processar'}
             </Button>
+            <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
+              Subir VTT
+            </Button>
           </InputGroup>
+          <Form.Control
+            type="file"
+            accept=".vtt"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            onChange={handleVttFileSelect}
+          />
           {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
         </div>
 
         {videoId && (
-          <div className="player-wrapper mb-4">
+          <div className="player-wrapper">
             <YouTube videoId={videoId} opts={opts} onReady={onPlayerReady} className="react-player" />
           </div>
         )}

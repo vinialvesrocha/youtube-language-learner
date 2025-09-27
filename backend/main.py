@@ -11,6 +11,7 @@ import requests
 import json
 import re
 import spacy
+import io
 
 import os
 
@@ -85,6 +86,10 @@ class VideoRequest(BaseModel):
 
 class FlashcardRequest(BaseModel):
     words: List[str]
+    previous_subtitle: str | None = None
+    current_subtitle: str | None = None
+    next_subtitle: str | None = None
+
 
 class GeneratedFlashcard(BaseModel):
     english_sentence: str
@@ -99,17 +104,35 @@ class CardProcessingRequest(BaseModel):
     words: List[str]
     flashcards: List[GeneratedFlashcard]
 
+class VttUploadRequest(BaseModel):
+    vtt_content: str
+
+class MoreFlashcardsRequest(BaseModel):
+    words: List[str]
+    previous_subtitle: str | None = None
+    current_subtitle: str | None = None
+    next_subtitle: str | None = None
+    existing_flashcards: List[GeneratedFlashcard]
+    context_type: str  # 'in_context' or 'out_of_context'
+
 # --- Funções Helper ---
 def get_base_term(term: str) -> str:
-    """Lematiza o termo, a menos que seja um verbo irregular conhecido."""
-    lower_term = term.lower()
+    """Lematiza o termo. Se for uma expressão, lematiza cada palavra."""
+    lower_term = term.lower().strip()
+    
+    # Se a expressão inteira for uma exceção (improvável, mas para segurança)
     if lower_term in IRREGULAR_VERBS:
         return lower_term
     
     doc = nlp(lower_term)
-    # Pega o lema do primeiro token (considerando que 'term' é uma palavra ou expressão curta)
-    base_form = doc[0].lemma_
-    return base_form
+    
+    # Lematiza cada token, mas mantém a palavra original se for um verbo irregular conhecido
+    lemmas = [
+        token.text if token.text in IRREGULAR_VERBS else token.lemma_
+        for token in doc
+    ]
+    
+    return " ".join(lemmas)
 
 # --- Endpoints ---
 @app.get("/")
@@ -121,57 +144,118 @@ def generate_flashcards(request: FlashcardRequest):
     if not os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") == "FAKE_KEY_FOR_INITIALIZATION":
         raise HTTPException(status_code=400, detail="A chave da API do Gemini não foi configurada no servidor.")
 
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash-001')
     term = " ".join(request.words)
 
+    # Constrói a string de contexto
+    context = ""
+    if request.previous_subtitle:
+        context += f"Legenda anterior: {request.previous_subtitle}\n"
+    if request.current_subtitle:
+        context += f"Legenda atual (onde o termo foi selecionado): {request.current_subtitle}\n"
+    if request.next_subtitle:
+        context += f"Próxima legenda: {request.next_subtitle}\n"
+
     prompt = f"""
-    Crie 3 flashcards para o seguinte termo ou expressão em inglês: "{term}".
+    Você é um assistente de aprendizado de idiomas. Sua tarefa é criar flashcards para o termo em inglês "{term}".
 
-    Para cada flashcard, forneça:
-    1. Uma frase de exemplo em inglês, usando o termo. A frase deve ser simples e clara.
-    2. A tradução completa dessa frase para o português brasileiro.
-    3. A tradução específica do termo "{term}" DENTRO do contexto da frase, em português.
+    **Contexto do vídeo:**
+    {context}
 
-    Formate a sua resposta EXATAMENTE como um JSON contendo uma lista de objetos.
-    Cada objeto deve ter as chaves "english_sentence", "portuguese_translation" e "term_translation".
-    Não inclua nenhuma formatação extra, como markdown (`json` ou ```).
+    **Instruções:**
+    1. Analise o contexto fornecido para entender o significado de "{term}".
+    2. Crie um total de 4 flashcards.
+    3. Os **2 primeiros flashcards** DEVEM usar o significado de "{term}" como ele aparece no contexto do vídeo. As frases de exemplo devem ser semelhantes ao contexto.
+    4. Os **próximos 2 flashcards** DEVEM mostrar diferentes significados ou usos de "{term}" em vários outros contextos.
+    5. Para cada flashcard, forneça:
+        - "english_sentence": Uma frase de exemplo em inglês, com o termo "{term}" em negrito (<b>{term}</b>).
+        - "portuguese_translation": A tradução completa da frase para o português brasileiro, com a tradução do termo também em negrito (<b>tradução</b>).
+        - "term_translation": A tradução específica de "{term}" dentro do contexto dessa frase.
 
-    Exemplo de formato de resposta para o termo "fast":
-    [
-        {{
-            "english_sentence": "He is running fast.",
-            "portuguese_translation": "Ele está correndo rápido.",
-            "term_translation": "rápido"
-        }},
-        {{
-            "english_sentence": "The monk will fast for a day.",
-            "portuguese_translation": "O monge vai jejuar por um dia.",
-            "term_translation": "jejuar"
-        }}
-    ]
+    **Formato de Saída:**
+    Sua resposta DEVE ser uma lista JSON válida de 4 objetos, sem formatação extra ou markdown.
     """
 
     try:
         response = model.generate_content(prompt)
+        # Limpa a resposta para garantir que seja um JSON válido
         cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         
         raw_flashcards = json.loads(cleaned_response_text)
-        
-        processed_flashcards = []
-        for card in raw_flashcards:
-            # Adiciona o negrito na palavra/termo selecionado
-            sentence = card.get("english_sentence", "")
-            # Usa regex para substituir a palavra/termo de forma case-insensitive
-            bolded_sentence = re.sub(f"(?i)({re.escape(term)})", r"<b>\1</b>", sentence, 1)
-            card["english_sentence"] = bolded_sentence
-            processed_flashcards.append(card)
 
-        return {"flashcards": processed_flashcards}
+        return {"flashcards": raw_flashcards}
 
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="Erro ao decodificar a resposta da IA. A resposta não foi um JSON válido.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao gerar flashcards: {e}")
+
+@app.post("/api/generate-more-flashcards")
+def generate_more_flashcards(request: MoreFlashcardsRequest):
+    if not os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") == "FAKE_KEY_FOR_INITIALIZATION":
+        raise HTTPException(status_code=400, detail="A chave da API do Gemini não foi configurada no servidor.")
+
+    model = genai.GenerativeModel('gemini-2.0-flash-001')
+    term = " ".join(request.words)
+
+    # Constrói a string de contexto
+    context = ""
+    if request.previous_subtitle:
+        context += f"Legenda anterior: {request.previous_subtitle}\n"
+    if request.current_subtitle:
+        context += f"Legenda atual (onde o termo foi selecionado): {request.current_subtitle}\n"
+    if request.next_subtitle:
+        context += f"Próxima legenda: {request.next_subtitle}\n"
+
+    existing_cards_str = json.dumps([card.dict() for card in request.existing_flashcards], indent=2)
+
+    if request.context_type == 'in_context':
+        prompt = f"""
+        Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
+
+        **Contexto do vídeo:**
+        {context}
+
+        **Instruções:**
+        1. Você deve gerar 2 novos flashcards que usem o significado de "{term}" como ele aparece no contexto do vídeo.
+        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+
+        **Flashcards Existentes (NÃO repita estes):**
+        {existing_cards_str}
+
+        **Formato de Saída:**
+        Sua resposta DEVE ser uma lista JSON válida de 2 novos objetos.
+        """
+    else:  # out_of_context
+        prompt = f"""
+        Você é um assistente de aprendizado de idiomas. Sua tarefa é criar mais 2 flashcards para o termo em inglês "{term}".
+
+        **Instruções:**
+        1. Você deve gerar 2 novos flashcards que mostrem diferentes significados ou usos de "{term}" em vários outros contextos (NÃO o contexto do vídeo).
+        2. **Crucialmente, não repita nenhum dos exemplos já fornecidos.**
+        3. Para cada flashcard, forneça a estrutura JSON padrão ("english_sentence", "portuguese_translation", "term_translation").
+
+        **Flashcards Existentes (NÃO repita estes):**
+        {existing_cards_str}
+
+        **Contexto do Vídeo (para referência, para EVITAR este contexto):**
+        {context}
+
+        **Formato de Saída:**
+        Sua resposta DEVE ser uma lista JSON válida de 2 novos objetos.
+        """
+
+    try:
+        response = model.generate_content(prompt)
+        cleaned_response_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        new_flashcards = json.loads(cleaned_response_text)
+        return {"flashcards": new_flashcards}
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Erro ao decodificar a resposta da IA.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar mais flashcards: {e}")
 
 @app.post("/api/check-duplicates")
 def check_duplicates(request: CardProcessingRequest):
@@ -283,6 +367,27 @@ def send_to_anki(request: CardProcessingRequest):
         raise HTTPException(status_code=503, detail="Conexão com o Anki falhou. Verifique se o Anki está aberto e o add-on AnkiConnect está instalado.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ocorreu um erro inesperado: {str(e)}")
+
+@app.post("/api/process-vtt")
+def process_vtt(request: VttUploadRequest):
+    try:
+        captions = []
+        # Usa io.StringIO para tratar o conteúdo de string como um arquivo
+        vtt_file_like_object = io.StringIO(request.vtt_content)
+        for caption in webvtt.read_buffer(vtt_file_like_object):
+            captions.append({
+                'start': caption.start,
+                'end': caption.end,
+                'text': caption.text.strip()
+            })
+
+        return {
+            "message": "Legendas VTT processadas com sucesso!",
+            "subtitles": captions,
+        }
+    except Exception as e:
+        print(f"Erro ao processar arquivo VTT: {e}")
+        raise HTTPException(status_code=400, detail=f"Falha ao processar o arquivo VTT: {e}")
 
 @app.post("/api/process-video")
 def process_video(request: VideoRequest):
