@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import YouTube, { YouTubeProps } from 'react-youtube';
+import ReactPlayer from 'react-player';
 import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge, ListGroup } from 'react-bootstrap';
 import './App.css';
 
@@ -63,7 +63,8 @@ function App() {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [currentSubtitle, setCurrentSubtitle] = useState('');
-  const [player, setPlayer] = useState<any | null>(null);
+  const playerRef = useRef<any>(null);
+  const [playing, setPlaying] = useState(false); // Re-added playing state
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -121,14 +122,9 @@ function App() {
       }
 
       // Verifica se a tecla é a barra de espaço
-      if (event.code === 'Space' && player) {
+      if (event.code === 'Space' && playerRef.current) {
         event.preventDefault(); // Previne o scroll da página
-        const playerState = player.getPlayerState();
-        if (playerState === 1) { // 1: playing
-          player.pauseVideo();
-        } else { // 2: paused, -1: unstarted, 0: ended, 3: buffering, 5: cued
-          player.playVideo();
-        }
+        setPlaying(prevPlaying => !prevPlaying);
       }
     };
 
@@ -138,14 +134,18 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [player]); // Depende do objeto do player para funcionar
+  }, []); // A dependência do player foi removida pois a ref não muda
 
   // Efeito para buscar legenda atual
   useEffect(() => {
-    if (!player || !subtitles.length) return;
+    if (!playerRef.current || !subtitles.length || !playing) { // Changed player to playerRef.current and added playing
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        return;
+    };
 
     const updateSubtitle = () => {
-      const currentTime = player.getCurrentTime();
+      if (!playerRef.current) return;
+      const currentTime = playerRef.current.getCurrentTime();
       if (typeof currentTime !== 'number') return;
 
       const currentSub = subtitles.find(sub => {
@@ -167,7 +167,7 @@ function App() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [player, subtitles, currentSubtitle]);
+  }, [playerRef.current, subtitles, currentSubtitle, playing]); // Changed dependencies
 
   const handleProcessVideo = async () => {
     const id = getYouTubeId(videoUrl);
@@ -183,19 +183,9 @@ function App() {
     setCurrentSubtitle('');
     setSelectedWords([]);
     setVideoId(id);
-
+    setPlaying(true); // Auto-play
+    console.log('handleProcessVideo - videoId:', id, 'videoUrl:', videoUrl, 'playing:', true); // Added console.log
     try {
-      const response = await fetch('http://localhost:8000/api/process-video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ video_url: videoUrl }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Erro no servidor.');
-      }
-      const data = await response.json();
-      setSubtitles(data.subtitles);
 
       // Adiciona ao histórico
       const newVideo: Video = {
@@ -297,15 +287,13 @@ function App() {
     setSubtitles(video.subtitles);
     setCurrentSubtitle('');
     setSelectedWords([]);
+    setPlaying(true); // Auto-play
+    console.log('handleLoadFromHistory - videoId:', video.videoId, 'videoUrl:', video.videoUrl, 'playing:', true); // Added console.log
     // Rola a página para o player de vídeo
     setTimeout(() => {
       const playerElement = document.querySelector('.player-wrapper');
       playerElement?.scrollIntoView({ behavior: 'smooth' });
     }, 100);
-  };
-
-  const onPlayerReady: YouTubeProps['onReady'] = (event) => {
-    setPlayer(event.target);
   };
 
   const handleWordClick = (word: string) => {
@@ -724,7 +712,40 @@ function App() {
 
         {videoId && (
           <div className="player-wrapper">
-            <YouTube videoId={videoId} opts={opts} onReady={onPlayerReady} className="react-player" />
+            <ReactPlayer
+              ref={playerRef}
+              // @ts-ignore
+              url={videoUrl}
+              playing={playing}
+              controls
+              width="100%"
+              height="100%"
+              className="react-player"
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onProgress={(state: any) => { // Explicitly type state as any
+                const { playedSeconds } = state;
+                const currentSub = subtitles.find(sub => {
+                  const startTime = timeToSeconds(sub.start);
+                  const endTime = timeToSeconds(sub.end);
+                  return playedSeconds >= startTime && playedSeconds <= endTime;
+                });
+                const newSubtitleText = currentSub ? currentSub.text : '';
+                if (newSubtitleText !== currentSubtitle) {
+                  setCurrentSubtitle(newSubtitleText);
+                  setSelectedWords([]); // Clear selection when subtitle changes
+                }
+              }}
+              onError={(e) => console.error('ReactPlayer Error:', e)} // Added onError
+              // @ts-ignore
+              config={{
+                youtube: {
+                  playsinline: 1,
+                  modestbranding: 1,
+                  // Add other playerVars if needed
+                }
+              }}
+            />
           </div>
         )}
 
