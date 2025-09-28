@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import ReactPlayer from 'react-player';
+import YouTube, { YouTubeEvent, YouTubePlayer } from 'react-youtube';
 import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge, ListGroup } from 'react-bootstrap';
 import './App.css';
 
@@ -67,6 +67,7 @@ function App() {
   const [playing, setPlaying] = useState(false); // Re-added playing state
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isMounted = useRef(false); // Novo ref para rastrear a montagem do componente
 
   // Estado para seleção de palavras e flashcards
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
@@ -87,6 +88,43 @@ function App() {
   const [isGeneratingMore, setIsGeneratingMore] = useState({ in_context: false, out_of_context: false });
   const [inContextCount, setInContextCount] = useState(2);
 
+  const onPlayerReady = (event: YouTubeEvent) => {
+    playerRef.current = event.target;
+  };
+
+  const onPlayerPlay = (event: YouTubeEvent) => {
+    setPlaying(true);
+  };
+
+  const onPlayerPause = (event: YouTubeEvent) => {
+    setPlaying(false);
+  };
+
+  const onPlayerStateChange = (event: YouTubeEvent) => {
+    const player = event.target as YouTubePlayer;
+    if (player && typeof player.getCurrentTime === 'function') {
+      const currentTime = player.getCurrentTime();
+      if (typeof currentTime === 'number') {
+        const currentSub = subtitles.find(sub => {
+          const startTime = timeToSeconds(sub.start);
+          const endTime = timeToSeconds(sub.end);
+          return currentTime >= startTime && currentTime <= endTime;
+        });
+        
+        const newSubtitleText = currentSub ? currentSub.text : '';
+        if (newSubtitleText !== currentSubtitle) {
+          setCurrentSubtitle(newSubtitleText);
+          setSelectedWords([]);
+        }
+      }
+    }
+  };
+
+  const onPlayerError = (event: YouTubeEvent) => {
+    console.error('YouTube Player Error:', event.data);
+    setError(`Erro no player do YouTube: ${event.data}`);
+  };
+
   // Efeito para carregar dados do localStorage na inicialização
   useEffect(() => {
     const savedThemes = localStorage.getItem('customThemes');
@@ -95,7 +133,14 @@ function App() {
     }
     const savedHistory = localStorage.getItem('videoHistory');
     if (savedHistory) {
-      setVideoHistory(JSON.parse(savedHistory));
+      try {
+        const parsedHistory = JSON.parse(savedHistory);
+        setVideoHistory(parsedHistory);
+        console.log('Histórico carregado do localStorage:', parsedHistory);
+      } catch (e) {
+        console.error('Erro ao parsear histórico do localStorage:', e);
+        setVideoHistory([]);
+      }
     }
     setIsInitialLoad(false);
   }, []);
@@ -109,8 +154,13 @@ function App() {
 
   // Efeito para salvar histórico no localStorage
   useEffect(() => {
-    localStorage.setItem('videoHistory', JSON.stringify(videoHistory));
-  }, [videoHistory, isInitialLoad]);
+    if (isMounted.current) { // Só salva se o componente já estiver montado
+      console.log('Salvando histórico no localStorage:', videoHistory);
+      localStorage.setItem('videoHistory', JSON.stringify(videoHistory));
+    } else {
+      isMounted.current = true; // Marca como montado após a primeira execução
+    }
+  }, [videoHistory]); // Removido isInitialLoad
 
   // Efeito para tocar/pausar com a barra de espaço
   useEffect(() => {
@@ -138,13 +188,13 @@ function App() {
 
   // Efeito para buscar legenda atual
   useEffect(() => {
-    if (!playerRef.current || !subtitles.length || !playing) { // Changed player to playerRef.current and added playing
+    if (!playerRef.current || !subtitles.length || !playing) {
         if (intervalRef.current) clearInterval(intervalRef.current);
         return;
     };
 
     const updateSubtitle = () => {
-      if (!playerRef.current) return;
+      if (!playerRef.current || typeof playerRef.current.getCurrentTime !== 'function') return;
       const currentTime = playerRef.current.getCurrentTime();
       if (typeof currentTime !== 'number') return;
 
@@ -167,7 +217,7 @@ function App() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [playerRef.current, subtitles, currentSubtitle, playing]); // Changed dependencies
+  }, [playerRef.current, subtitles, currentSubtitle, playing]); // Removido isPlayerReady das dependências
 
   const handleProcessVideo = async () => {
     const id = getYouTubeId(videoUrl);
@@ -186,6 +236,16 @@ function App() {
     setPlaying(true); // Auto-play
     console.log('handleProcessVideo - videoId:', id, 'videoUrl:', videoUrl, 'playing:', true); // Added console.log
     try {
+      const response = await fetch('http://localhost:8000/api/process-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_url: videoUrl }),
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.detail || 'Erro no servidor.');
+      }
+      const data = await response.json(); // <--- Added this line
 
       // Adiciona ao histórico
       const newVideo: Video = {
@@ -195,7 +255,6 @@ function App() {
         thumbnailUrl: `https://img.youtube.com/vi/${data.video_id}/mqdefault.jpg`,
         subtitles: data.subtitles,
       };
-
       // Evita adicionar duplicatas
       if (!videoHistory.some(v => v.videoId === newVideo.videoId)) {
         setVideoHistory(prev => [newVideo, ...prev]);
@@ -523,13 +582,6 @@ function App() {
     }
   };
 
-  const opts: YouTubeProps['opts'] = {
-    playerVars: {
-      autoplay: 0,
-      rel: 0, // Não mostrar vídeos relacionados ao pausar
-    },
-  };
-
   const renderModalContent = () => {
     switch (modalStep) {
       case 'selection':
@@ -712,39 +764,25 @@ function App() {
 
         {videoId && (
           <div className="player-wrapper">
-            <ReactPlayer
-              ref={playerRef}
-              // @ts-ignore
-              url={videoUrl}
-              playing={playing}
-              controls
-              width="100%"
-              height="100%"
-              className="react-player"
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onProgress={(state: any) => { // Explicitly type state as any
-                const { playedSeconds } = state;
-                const currentSub = subtitles.find(sub => {
-                  const startTime = timeToSeconds(sub.start);
-                  const endTime = timeToSeconds(sub.end);
-                  return playedSeconds >= startTime && playedSeconds <= endTime;
-                });
-                const newSubtitleText = currentSub ? currentSub.text : '';
-                if (newSubtitleText !== currentSubtitle) {
-                  setCurrentSubtitle(newSubtitleText);
-                  setSelectedWords([]); // Clear selection when subtitle changes
-                }
+            <YouTube
+              videoId={videoId || ''} // videoId é obrigatório, passar string vazia se nulo
+              opts={{
+                height: '390', // Altura padrão, pode ser ajustada via CSS
+                width: '640',  // Largura padrão, pode ser ajustada via CSS
+                playerVars: {
+                  autoplay: playing ? 1 : 0, // Controla autoplay baseado no estado 'playing'
+                  controls: 1, // Mostrar controles do player
+                  rel: 0, // Não mostrar vídeos relacionados ao pausar
+                  modestbranding: 1, // Ocultar logo do YouTube
+                  playsinline: 1, // Reprodução inline em iOS
+                },
               }}
-              onError={(e) => console.error('ReactPlayer Error:', e)} // Added onError
-              // @ts-ignore
-              config={{
-                youtube: {
-                  playsinline: 1,
-                  modestbranding: 1,
-                  // Add other playerVars if needed
-                }
-              }}
+              onReady={onPlayerReady}
+              onPlay={onPlayerPlay}
+              onPause={onPlayerPause}
+              onStateChange={onPlayerStateChange} // Para monitorar progresso e outros estados
+              onError={onPlayerError}
+              className="react-player" // Manter a classe para o CSS existente
             />
           </div>
         )}
