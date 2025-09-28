@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import YouTube, { YouTubeProps } from 'react-youtube';
-import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge } from 'react-bootstrap';
+import YouTube, { YouTubeEvent, YouTubePlayer } from 'react-youtube';
+import { Navbar, Container, Form, Button, InputGroup, Spinner, Alert, Modal, Card, Badge, ListGroup } from 'react-bootstrap';
 import './App.css';
 
 // --- Interfaces e Funções Helper ---
@@ -20,6 +20,14 @@ interface Flashcard {
 interface ConfirmationCard {
   flashcard: Flashcard;
   is_duplicate: boolean;
+}
+
+interface Video {
+  videoUrl: string;
+  videoId: string;
+  videoTitle: string;
+  thumbnailUrl: string;
+  subtitles: Subtitle[];
 }
 
 const getYouTubeId = (url: string): string | null => {
@@ -45,16 +53,22 @@ const timeToSeconds = (time: string): number => {
 function App() {
   // Estado da UI
   const [videoUrl, setVideoUrl] = useState('');
+  const [customThemes, setCustomThemes] = useState('');
+  const [videoHistory, setVideoHistory] = useState<Video[]>([]);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pauseOnSubtitleEnd, setPauseOnSubtitleEnd] = useState(false); // Novo estado para pausar ao final da legenda
 
   // Estado do Player e Legendas
   const [videoId, setVideoId] = useState<string | null>(null);
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [currentSubtitle, setCurrentSubtitle] = useState('');
-  const [player, setPlayer] = useState<any | null>(null);
+  const playerRef = useRef<any>(null);
+  const [playing, setPlaying] = useState(false); // Re-added playing state
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const isMounted = useRef(false); // Novo ref para rastrear a montagem do componente
 
   // Estado para seleção de palavras e flashcards
   const [selectedWords, setSelectedWords] = useState<string[]>([]);
@@ -75,13 +89,131 @@ function App() {
   const [isGeneratingMore, setIsGeneratingMore] = useState({ in_context: false, out_of_context: false });
   const [inContextCount, setInContextCount] = useState(2);
 
+  const onPlayerReady = (event: YouTubeEvent) => {
+    playerRef.current = event.target;
+  };
+
+  const onPlayerPlay = (event: YouTubeEvent) => {
+    setPlaying(true);
+  };
+
+  const onPlayerPause = (event: YouTubeEvent) => {
+    setPlaying(false);
+  };
+
+  const onPlayerStateChange = (event: YouTubeEvent) => {
+    const player = event.target as YouTubePlayer;
+    if (player && typeof player.getCurrentTime === 'function') {
+      const currentTime = player.getCurrentTime();
+      if (typeof currentTime === 'number') {
+        const currentSub = subtitles.find(sub => {
+          const startTime = timeToSeconds(sub.start);
+          const endTime = timeToSeconds(sub.end);
+          return currentTime >= startTime && currentTime <= endTime;
+        });
+        
+        const newSubtitleText = currentSub ? currentSub.text : '';
+        if (newSubtitleText !== currentSubtitle) {
+          setCurrentSubtitle(newSubtitleText);
+          setSelectedWords([]);
+
+          // Lógica para pausar ao final da legenda
+          if (pauseOnSubtitleEnd && currentSub && event.data === 1) { // event.data === 1 significa PLAYING
+            const nextSubtitle = subtitles.find(sub => timeToSeconds(sub.start) > currentTime);
+            if (!nextSubtitle) { // Se não há próxima legenda, não pausar
+                return;
+            }
+            const timeUntilEnd = timeToSeconds(currentSub.end) - currentTime;
+            if (timeUntilEnd <= 0.2) { // Pausar um pouco antes do fim da legenda atual
+              player.pauseVideo();
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const onPlayerError = (event: YouTubeEvent) => {
+    console.error('YouTube Player Error:', event.data);
+    setError(`Erro no player do YouTube: ${event.data}`);
+  };
+
+  // Efeito para carregar dados do localStorage na inicialização
+  useEffect(() => {
+    const savedThemes = localStorage.getItem('customThemes');
+    if (savedThemes) {
+      setCustomThemes(savedThemes);
+    }
+    const savedHistory = localStorage.getItem('videoHistory');
+    if (savedHistory) {
+      try {
+        const parsedHistory = JSON.parse(savedHistory);
+        setVideoHistory(parsedHistory);
+        console.log('Histórico carregado do localStorage:', parsedHistory);
+      } catch (e) {
+        console.error('Erro ao parsear histórico do localStorage:', e);
+        setVideoHistory([]);
+      }
+    }
+    const savedPauseSetting = localStorage.getItem('pauseOnSubtitleEnd');
+    if (savedPauseSetting !== null) {
+      setPauseOnSubtitleEnd(JSON.parse(savedPauseSetting));
+    }
+    setIsInitialLoad(false);
+  }, []);
+
+  // Efeito para salvar temas e configurações no localStorage
+  useEffect(() => {
+    if (!isInitialLoad) {
+      localStorage.setItem('customThemes', customThemes);
+      localStorage.setItem('pauseOnSubtitleEnd', JSON.stringify(pauseOnSubtitleEnd));
+    }
+  }, [customThemes, pauseOnSubtitleEnd, isInitialLoad]);
+
+  // Efeito para salvar histórico no localStorage
+  useEffect(() => {
+    if (isMounted.current) { // Só salva se o componente já estiver montado
+      console.log('Salvando histórico no localStorage:', videoHistory);
+      localStorage.setItem('videoHistory', JSON.stringify(videoHistory));
+    } else {
+      isMounted.current = true; // Marca como montado após a primeira execução
+    }
+  }, [videoHistory]); // Removido isInitialLoad
+
+  // Efeito para tocar/pausar com a barra de espaço
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignora se estiver digitando em um input ou textarea
+      const activeElement = document.activeElement;
+      if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+
+      // Verifica se a tecla é a barra de espaço
+      if (event.code === 'Space' && playerRef.current) {
+        event.preventDefault(); // Previne o scroll da página
+        setPlaying(prevPlaying => !prevPlaying);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Limpa o event listener ao desmontar o componente
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []); // A dependência do player foi removida pois a ref não muda
 
   // Efeito para buscar legenda atual
   useEffect(() => {
-    if (!player || !subtitles.length) return;
+    if (!playerRef.current || !subtitles.length || !playing) {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        return;
+    };
 
     const updateSubtitle = () => {
-      const currentTime = player.getCurrentTime();
+      if (!playerRef.current || typeof playerRef.current.getCurrentTime !== 'function') return;
+      const currentTime = playerRef.current.getCurrentTime();
       if (typeof currentTime !== 'number') return;
 
       const currentSub = subtitles.find(sub => {
@@ -103,7 +235,7 @@ function App() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [player, subtitles, currentSubtitle]);
+  }, [playerRef.current, subtitles, currentSubtitle, playing]); // Removido isPlayerReady das dependências
 
   const handleProcessVideo = async () => {
     const id = getYouTubeId(videoUrl);
@@ -119,7 +251,8 @@ function App() {
     setCurrentSubtitle('');
     setSelectedWords([]);
     setVideoId(id);
-
+    setPlaying(true); // Auto-play
+    console.log('handleProcessVideo - videoId:', id, 'videoUrl:', videoUrl, 'playing:', true); // Added console.log
     try {
       const response = await fetch('http://localhost:8000/api/process-video', {
         method: 'POST',
@@ -130,8 +263,20 @@ function App() {
         const data = await response.json();
         throw new Error(data.detail || 'Erro no servidor.');
       }
-      const data = await response.json();
-      setSubtitles(data.subtitles);
+      const data = await response.json(); // <--- Added this line
+
+      // Adiciona ao histórico
+      const newVideo: Video = {
+        videoUrl: videoUrl,
+        videoId: data.video_id,
+        videoTitle: data.video_title,
+        thumbnailUrl: `https://img.youtube.com/vi/${data.video_id}/mqdefault.jpg`,
+        subtitles: data.subtitles,
+      };
+      // Evita adicionar duplicatas
+      if (!videoHistory.some(v => v.videoId === newVideo.videoId)) {
+        setVideoHistory(prev => [newVideo, ...prev]);
+      }
     } catch (err: any) {
       setError(err.message || 'Erro desconhecido.');
       setVideoId(null);
@@ -185,6 +330,20 @@ function App() {
 
             const data = await response.json();
             setSubtitles(data.subtitles);
+
+            // Adiciona ao histórico
+            const newVideo: Video = {
+              videoUrl: videoUrl, // A URL que já estava no input
+              videoId: id,      // O ID extraído da URL
+              videoTitle: videoUrl, // Usa a URL como título, já que não temos o título real
+              thumbnailUrl: `https://img.youtube.com/vi/${id}/mqdefault.jpg`,
+              subtitles: data.subtitles,
+            };
+
+            // Evita adicionar duplicatas
+            if (!videoHistory.some(v => v.videoId === newVideo.videoId)) {
+              setVideoHistory(prev => [newVideo, ...prev]);
+            }
         } catch (err: any) {
             setError(err.message || 'Erro desconhecido ao processar o arquivo.');
         } finally {
@@ -198,8 +357,20 @@ function App() {
     reader.readAsText(file);
   };
 
-  const onPlayerReady: YouTubeProps['onReady'] = (event) => {
-    setPlayer(event.target);
+  const handleLoadFromHistory = (video: Video) => {
+    setError('');
+    setVideoUrl(video.videoUrl);
+    setVideoId(video.videoId);
+    setSubtitles(video.subtitles);
+    setCurrentSubtitle('');
+    setSelectedWords([]);
+    setPlaying(true); // Auto-play
+    console.log('handleLoadFromHistory - videoId:', video.videoId, 'videoUrl:', video.videoUrl, 'playing:', true); // Added console.log
+    // Rola a página para o player de vídeo
+    setTimeout(() => {
+      const playerElement = document.querySelector('.player-wrapper');
+      playerElement?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
   };
 
   const handleWordClick = (word: string) => {
@@ -237,6 +408,8 @@ function App() {
     const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
     const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
 
+    const themesArray = customThemes.split(',').map(t => t.trim()).filter(t => t);
+
     try {
       const response = await fetch('http://localhost:8000/api/generate-flashcards', {
         method: 'POST',
@@ -246,6 +419,7 @@ function App() {
           previous_subtitle: previousSubtitle,
           current_subtitle: currentSubtitle,
           next_subtitle: nextSubtitle,
+          custom_themes: themesArray.length > 0 ? themesArray : undefined,
         }),
       });
       if (!response.ok) {
@@ -382,6 +556,8 @@ function App() {
     const previousSubtitle = currentIndex > 0 ? subtitles[currentIndex - 1].text : '';
     const nextSubtitle = currentIndex < subtitles.length - 1 ? subtitles[currentIndex + 1].text : '';
 
+    const themesArray = customThemes.split(',').map(t => t.trim()).filter(t => t);
+
     try {
       const response = await fetch('http://localhost:8000/api/generate-more-flashcards', {
         method: 'POST',
@@ -393,6 +569,7 @@ function App() {
           next_subtitle: nextSubtitle,
           existing_flashcards: generatedFlashcards,
           context_type: contextType,
+          custom_themes: themesArray.length > 0 ? themesArray : undefined,
         }),
       });
 
@@ -421,12 +598,6 @@ function App() {
     } finally {
       setIsGeneratingMore(prev => ({ ...prev, [contextType]: false }));
     }
-  };
-
-  const opts: YouTubeProps['opts'] = {
-    playerVars: {
-      autoplay: 0,
-    },
   };
 
   const renderModalContent = () => {
@@ -553,14 +724,41 @@ function App() {
       <Navbar bg="dark" variant="dark"><Container><Navbar.Brand>YouTube Language Learner</Navbar.Brand></Container></Navbar>
       <Container className="mt-4 pb-5"> {/* Padding bottom para não sobrepor o botão */}
         <div className="mb-4 p-4 border rounded">
-          <InputGroup>
+          <Form.Group className="mb-3">
+            <Form.Label>Temas de Interesse (opcional)</Form.Label>
             <Form.Control
-              placeholder="Cole a URL de um vídeo do YouTube..."
-              value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
+              type="text"
+              placeholder="Ex: tecnologia, história, culinária..."
+              value={customThemes}
+              onChange={(e) => setCustomThemes(e.target.value)}
               disabled={isLoading}
             />
-            <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
+                      <Form.Text className="text-muted">
+                        Separe os temas com vírgulas para gerar exemplos de seu interesse.
+                      </Form.Text>
+                    </Form.Group>
+            
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="checkbox"
+                        id="pauseOnSubtitleEndCheck"
+                        label="Pausar vídeo ao final de cada legenda"
+                        checked={pauseOnSubtitleEnd}
+                        onChange={(e) => setPauseOnSubtitleEnd(e.target.checked)}
+                        disabled={isLoading}
+                      />
+                      <Form.Text className="text-muted">
+                        Ativa a pausa automática do vídeo quando uma legenda termina, ideal para estudo.
+                      </Form.Text>
+                    </Form.Group>
+            
+                    <InputGroup>
+                      <Form.Control
+                        placeholder="Cole a URL de um vídeo do YouTube..."
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        disabled={isLoading}
+                      />            <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
               {isLoading ? <Spinner size="sm" /> : 'Processar'}
             </Button>
             <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
@@ -577,9 +775,47 @@ function App() {
           {error && <Alert variant="danger" className="mt-3">{error}</Alert>}
         </div>
 
+        {videoHistory.length > 0 && (
+          <div className="mb-4 p-4 border rounded">
+            <h5 className="mb-3">Histórico</h5>
+            <ListGroup variant="flush">
+              {videoHistory.map(video => (
+                <ListGroup.Item key={video.videoId} className="d-flex justify-content-between align-items-center">
+                  <img src={video.thumbnailUrl} alt={`Thumbnail for ${video.videoTitle}`} className="me-3 img-thumbnail" style={{ width: '120px' }} />
+                  <div className="flex-grow-1">
+                    {video.videoTitle}
+                  </div>
+                  <Button variant="outline-secondary" size="sm" onClick={() => handleLoadFromHistory(video)}>
+                    Carregar
+                  </Button>
+                </ListGroup.Item>
+              ))}
+            </ListGroup>
+          </div>
+        )}
+
         {videoId && (
           <div className="player-wrapper">
-            <YouTube videoId={videoId} opts={opts} onReady={onPlayerReady} className="react-player" />
+            <YouTube
+              videoId={videoId || ''} // videoId é obrigatório, passar string vazia se nulo
+              opts={{
+                height: '390', // Altura padrão, pode ser ajustada via CSS
+                width: '640',  // Largura padrão, pode ser ajustada via CSS
+                playerVars: {
+                  autoplay: playing ? 1 : 0, // Controla autoplay baseado no estado 'playing'
+                  controls: 1, // Mostrar controles do player
+                  rel: 0, // Não mostrar vídeos relacionados ao pausar
+                  modestbranding: 1, // Ocultar logo do YouTube
+                  playsinline: 1, // Reprodução inline em iOS
+                },
+              }}
+              onReady={onPlayerReady}
+              onPlay={onPlayerPlay}
+              onPause={onPlayerPause}
+              onStateChange={onPlayerStateChange} // Para monitorar progresso e outros estados
+              onError={onPlayerError}
+              className="react-player" // Manter a classe para o CSS existente
+            />
           </div>
         )}
 
