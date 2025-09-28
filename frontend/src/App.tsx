@@ -58,6 +58,7 @@ function App() {
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pauseOnSubtitleEnd, setPauseOnSubtitleEnd] = useState(false); // Novo estado para pausar ao final da legenda
 
   // Estado do Player e Legendas
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -115,6 +116,18 @@ function App() {
         if (newSubtitleText !== currentSubtitle) {
           setCurrentSubtitle(newSubtitleText);
           setSelectedWords([]);
+
+          // Lógica para pausar ao final da legenda
+          if (pauseOnSubtitleEnd && currentSub && event.data === 1) { // event.data === 1 significa PLAYING
+            const nextSubtitle = subtitles.find(sub => timeToSeconds(sub.start) > currentTime);
+            if (!nextSubtitle) { // Se não há próxima legenda, não pausar
+                return;
+            }
+            const timeUntilEnd = timeToSeconds(currentSub.end) - currentTime;
+            if (timeUntilEnd <= 0.2) { // Pausar um pouco antes do fim da legenda atual
+              player.pauseVideo();
+            }
+          }
         }
       }
     }
@@ -142,15 +155,20 @@ function App() {
         setVideoHistory([]);
       }
     }
+    const savedPauseSetting = localStorage.getItem('pauseOnSubtitleEnd');
+    if (savedPauseSetting !== null) {
+      setPauseOnSubtitleEnd(JSON.parse(savedPauseSetting));
+    }
     setIsInitialLoad(false);
   }, []);
 
-  // Efeito para salvar temas no localStorage
+  // Efeito para salvar temas e configurações no localStorage
   useEffect(() => {
     if (!isInitialLoad) {
       localStorage.setItem('customThemes', customThemes);
+      localStorage.setItem('pauseOnSubtitleEnd', JSON.stringify(pauseOnSubtitleEnd));
     }
-  }, [customThemes, isInitialLoad]);
+  }, [customThemes, pauseOnSubtitleEnd, isInitialLoad]);
 
   // Efeito para salvar histórico no localStorage
   useEffect(() => {
@@ -715,18 +733,32 @@ function App() {
               onChange={(e) => setCustomThemes(e.target.value)}
               disabled={isLoading}
             />
-            <Form.Text className="text-muted">
-              Separe os temas com vírgulas para gerar exemplos de seu interesse.
-            </Form.Text>
-          </Form.Group>
-          <InputGroup>
-            <Form.Control
-              placeholder="Cole a URL de um vídeo do YouTube..."
-              value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
-              disabled={isLoading}
-            />
-            <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
+                      <Form.Text className="text-muted">
+                        Separe os temas com vírgulas para gerar exemplos de seu interesse.
+                      </Form.Text>
+                    </Form.Group>
+            
+                    <Form.Group className="mb-3">
+                      <Form.Check
+                        type="checkbox"
+                        id="pauseOnSubtitleEndCheck"
+                        label="Pausar vídeo ao final de cada legenda"
+                        checked={pauseOnSubtitleEnd}
+                        onChange={(e) => setPauseOnSubtitleEnd(e.target.checked)}
+                        disabled={isLoading}
+                      />
+                      <Form.Text className="text-muted">
+                        Ativa a pausa automática do vídeo quando uma legenda termina, ideal para estudo.
+                      </Form.Text>
+                    </Form.Group>
+            
+                    <InputGroup>
+                      <Form.Control
+                        placeholder="Cole a URL de um vídeo do YouTube..."
+                        value={videoUrl}
+                        onChange={(e) => setVideoUrl(e.target.value)}
+                        disabled={isLoading}
+                      />            <Button variant="primary" onClick={handleProcessVideo} disabled={isLoading}>
               {isLoading ? <Spinner size="sm" /> : 'Processar'}
             </Button>
             <Button variant="secondary" onClick={() => fileInputRef.current?.click()} disabled={isLoading}>
