@@ -59,26 +59,6 @@ ANKI_CONNECT_URL = "http://localhost:8765"
 DECK_NAME = "ENGLISH-A2"
 MODEL_NAME = "YTLearner-Advanced" # Modelo de nota personalizado
 
-# Lista de verbos irregulares comuns (em sua forma base) para não serem lematizados
-# Adicionar formas passadas e de particípio para garantir que não sejam alteradas
-IRREGULAR_VERBS = {
-    "be", "was", "were", "been", "is", "are", "am",
-    "buy", "bought",
-    "go", "went", "gone",
-    "do", "did", "done",
-    "have", "had",
-    "make", "made",
-    "say", "said",
-    "see", "saw", "seen",
-    "take", "took", "taken",
-    "get", "got", "gotten",
-    "think", "thought",
-    "know", "knew", "known",
-    "come", "came",
-    "find", "found",
-    "give", "gave", "given",
-    "tell", "told"
-}
 
 # --- Modelos de Dados (Pydantic) ---
 class VideoRequest(BaseModel):
@@ -121,19 +101,8 @@ class MoreFlashcardsRequest(BaseModel):
 def get_base_term(term: str) -> str:
     """Lematiza o termo. Se for uma expressão, lematiza cada palavra."""
     lower_term = term.lower().strip()
-    
-    # Se a expressão inteira for uma exceção (improvável, mas para segurança)
-    if lower_term in IRREGULAR_VERBS:
-        return lower_term
-    
     doc = nlp(lower_term)
-    
-    # Lematiza cada token, mas mantém a palavra original se for um verbo irregular conhecido
-    lemmas = [
-        token.text if token.text in IRREGULAR_VERBS else token.lemma_
-        for token in doc
-    ]
-    
+    lemmas = [token.lemma_ for token in doc]
     return " ".join(lemmas)
 
 # --- Endpoints ---
